@@ -4,48 +4,7 @@ Paper-Mind is a Full-Stack AI Document Q&A application. This document outlines t
 
 ## High-Level Architecture Diagram
 
-```mermaid
-graph LR
-    %% Main Containers
-    subgraph Client["CLIENT INTERFACE (Utilizes Astro & React)"]
-        App["💻 AI Q&A App\n(Welcome, Upload, Chat)"]
-    end
-
-    subgraph Backend["BACKEND SERVER (Astro API Routes)"]
-        direction TB
-        Auth["🔑 AUTH\n(Login/Sign-up/Verify)"]
-        Docs["📄 DOCUMENTS\n(Upload, Process, View)"]
-        Chat["💬 CHAT\n(Submit Query, Get Answer)"]
-    end
-
-    subgraph Services["DATABASE & AI SERVICES"]
-        direction TB
-        Embed["🧠 gemini-embedding-001\n(Used for Vectorizing Text)"]
-        DB[("🛢️ PostgreSQL + pgvector\n(Stores Vector Embeddings)")]
-        LLM["✨ Google Gemini AI\n(RAG Engine / LLM Processing)"]
-    end
-
-    %% Client to Backend Connections
-    App --> Auth
-    App <--> Docs
-    App <--> Chat
-
-    %% Backend to Database & AI Connections
-    Auth --> DB
-    Docs <--> DB
-    Chat -->|"Query"| LLM
-    LLM -->|"Response"| Chat
-
-    %% Internal Database & AI Connections
-    DB <-->|"Retrieves Context"| LLM
-    Embed -.->|"Saves Vectors"| DB
-
-    %% Theming
-    classDef default fill:#f8f9fa,stroke:#d1d5db,stroke-width:2px,color:#1f2937;
-    classDef container fill:#ffffff,stroke:#3b82f6,stroke-width:2px,rx:8px;
-    
-    class Client,Backend,Services container;
-```
+![Architecture Diagram](./Paper-Mind%20Architectural%20Diagram.png)
 
 ## Component Breakdown
 
