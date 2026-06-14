@@ -1,46 +1,68 @@
-# Astro Starter Kit: Basics
+# Paper-Mind
 
-```sh
-npm create astro@latest -- --template basics
-```
+Paper-Mind is an AI-powered Full-Stack Document Q&A application built with modern web technologies. It allows users to upload documents and interactively ask questions about their content using Google's Gemini API and Retrieval-Augmented Generation (RAG).
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+## Features
 
-## 🚀 Project Structure
+- **Document Upload & Parsing**: Supports PDF, DOCX, and XLSX files.
+- **AI-Powered Q&A**: Ask questions and get answers based on the contents of your uploaded documents.
+- **RAG Architecture**: Uses embeddings to find relevant context from documents to provide accurate, context-aware answers.
+- **Authentication**: Secure user registration and login using JWT.
+- **Beautiful UI**: Modern, responsive design built with Tailwind CSS v4 and Astro.
 
-Inside of your Astro project, you'll see the following folders and files:
+## Tech Stack
 
-```text
-/
-├── public/
-│   └── favicon.svg
-├── src
-│   ├── assets
-│   │   └── astro.svg
-│   ├── components
-│   │   └── Welcome.astro
-│   ├── layouts
-│   │   └── Layout.astro
-│   └── pages
-│       └── index.astro
-└── package.json
-```
+- **Framework**: [Astro](https://astro.build/)
+- **UI Library**: [React](https://react.dev/)
+- **Styling**: [Tailwind CSS v4](https://tailwindcss.com/)
+- **Database**: PostgreSQL
+- **AI & Embeddings**: Google Gemini API (`@google/generative-ai`)
+- **Authentication**: JSON Web Tokens (`jsonwebtoken`)
+- **Document Processing**: `pdf-parse`, `mammoth`, `xlsx`
 
-To learn more about the folder structure of an Astro project, refer to [our guide on project structure](https://docs.astro.build/en/basics/project-structure/).
+## Getting Started
 
-## 🧞 Commands
+### Prerequisites
 
-All commands are run from the root of the project, from a terminal:
+- Node.js (v22.12.0 or higher)
+- PostgreSQL running locally or via Docker
+- A Google Gemini API Key (get one from [Google AI Studio](https://aistudio.google.com/))
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
+### Installation
 
-## 👀 Want to learn more?
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/LeywinArt/Paper-Mind.git
+   cd Paper-Mind
+   ```
 
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Configure environment variables:
+   Copy `.env.example` to `.env` and fill in your details:
+   ```bash
+   cp .env.example .env
+   ```
+   *Note: Make sure to add your actual Gemini API Key and PostgreSQL connection string.*
+
+4. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+5. Open your browser and navigate to `http://localhost:4321`.
+
+## Project Structure
+
+- `/src/pages` - Astro pages (routes) including API endpoints for Auth and Chat
+- `/src/components` - React and Astro UI components
+- `/src/layouts` - Astro layout templates
+- `/src/lib` - Core logic including DB connection, Gemini integration, and document parsers
+- `/public` - Static assets
+
+## License
+
+This project is licensed under the MIT License.
