@@ -1,0 +1,164 @@
+---
+import '../styles/global.css';
+import { getUserFromCookies } from '../lib/auth';
+import logo from '../assets/logo.svg';
+import { ClientRouter } from 'astro:transitions';
+
+interface Props {
+  title?: string;
+  hideDotGrid?: boolean;
+}
+
+const { title = 'Paper Mind', hideDotGrid = false } = Astro.props;
+
+// Check auth status for displaying header details
+const user = getUserFromCookies(Astro.cookies);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+    <ClientRouter />
+  </head>
+  <body class={`bg-canvas-soft text-ink font-body flex flex-col min-h-screen ${hideDotGrid ? '' : 'dot-grid-bg'}`}>
+    
+    <!-- Header Navigation (Vercel Style) -->
+    <header class="border-b border-hairline h-20 shrink-0 bg-canvas/90 backdrop-blur-sm sticky top-0 z-40 flex items-center shadow-sm w-full">
+      <div class="w-full max-w-[1400px] mx-auto px-6 sm:px-12 flex items-center justify-between">
+        <!-- Logo (Left Zone) -->
+        <div class="flex items-center gap-6">
+          <a href="/" class="flex items-center gap-2 group">
+            <img src={logo.src} alt="Paper Mind Logo" class="h-14 w-auto" />
+          </a>
+
+          <!-- Menu (Center Zone) -->
+          {user && (
+            <nav class="hidden md:flex items-center gap-2 ml-4">
+              <a href="/dashboard" class="text-body hover:text-ink text-sm font-medium transition-colors px-3 py-1 rounded-full hover:bg-canvas-soft">Dashboard</a>
+              <a href="/chat" class="text-body hover:text-ink text-sm font-medium transition-colors px-3 py-1 rounded-full hover:bg-canvas-soft">Chat Console</a>
+            </nav>
+          )}
+        </div>
+
+        <!-- Profile/Auth (Right Zone) -->
+        <div class="flex items-center gap-4">
+          {user ? (
+            <div class="flex items-center gap-3">
+              <div class="flex items-center gap-2.5 pl-1.5 pr-4 py-1.5 rounded-full border border-hairline bg-canvas shadow-sm hover:shadow-md transition-shadow">
+                <div class="w-7 h-7 rounded-full bg-gradient-to-br from-violet to-fuchsia flex items-center justify-center text-white text-xs font-bold shadow-inner">
+                  {user.email.charAt(0).toUpperCase()}
+                </div>
+                <span class="text-sm font-medium text-ink hidden sm:inline-block">{user.email}</span>
+              </div>
+              <button 
+                id="logoutBtn"
+                class="flex items-center justify-center px-4 py-2 rounded-full bg-canvas text-sm font-medium text-body border border-hairline hover:text-error hover:border-error-soft hover:bg-error-soft/30 transition-all shadow-sm"
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <div class="flex items-center gap-3">
+              <a href="/login" class="btn-secondary-sm">Log In</a>
+              <a href="/register" class="btn-primary-sm">Sign Up</a>
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-grow flex flex-col w-full">
+      <slot />
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-hairline bg-canvas py-16 mt-auto w-full">
+      <div class="max-w-[1400px] mx-auto px-6 sm:px-12 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div class="flex items-center gap-2">
+          <img src={logo.src} alt="Paper Mind Logo" class="h-10 w-auto" />
+          <span class="font-body text-sm text-body ml-2">© 2026 Paper Mind.</span>
+        </div>
+        <div class="flex gap-6 text-sm text-body font-body">
+          <a href="#" class="hover:text-ink transition-colors">API Docs</a>
+          <a href="#" class="hover:text-ink transition-colors">Privacy</a>
+          <a href="#" class="hover:text-ink transition-colors">Terms of Service</a>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 z-50 flex flex-col gap-3"></div>
+
+    <script is:inline>
+      // Custom Toast Notification System
+      window.showToast = function(message, type = 'default') {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+
+        const toast = document.createElement('div');
+        let bgClass = 'bg-canvas text-ink';
+        let borderClass = 'border-hairline';
+        
+        if (type === 'error') {
+          bgClass = 'bg-[#f7d4d6] text-[#c50000]';
+          borderClass = 'border-[#f7d4d6]';
+        } else if (type === 'success') {
+          bgClass = 'bg-canvas text-success';
+          borderClass = 'border-hairline';
+        }
+
+        toast.className = `transform transition-all duration-300 translate-y-8 opacity-0 flex items-center justify-between px-4 py-3 rounded-md shadow-[var(--shadow-level-4)] border ${borderClass} ${bgClass} text-sm font-body max-w-sm min-w-[280px]`;
+        
+        toast.innerHTML = `
+          <span>${message}</span>
+          <button class="ml-4 text-mute hover:text-ink">&times;</button>
+        `;
+
+        container.appendChild(toast);
+        
+        // Trigger animation
+        requestAnimationFrame(() => {
+          toast.classList.remove('translate-y-8', 'opacity-0');
+        });
+
+        // Close button
+        const closeBtn = toast.querySelector('button');
+        const removeToast = () => {
+          toast.classList.add('translate-y-8', 'opacity-0');
+          setTimeout(() => toast.remove(), 300);
+        };
+        closeBtn.addEventListener('click', removeToast);
+
+        // Auto remove
+        setTimeout(removeToast, 5000);
+      };
+
+      // Expose globally for modules
+      document.addEventListener('astro:page-load', () => {
+        // Handle logout button click
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (logoutBtn) {
+          logoutBtn.addEventListener('click', async () => {
+            try {
+              const response = await fetch('/api/auth/logout', { method: 'POST' });
+              if (response.ok) {
+                window.location.href = '/login';
+              } else {
+                window.showToast('Logout failed. Please try again.', 'error');
+              }
+            } catch (error) {
+              console.error('Logout error:', error);
+              window.showToast('Network error during logout.', 'error');
+            }
+          });
+        }
+      });
+    </script>
+  </body>
+</html>

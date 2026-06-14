@@ -1,0 +1,121 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getUserFromCookies } from '../lib/auth';
+import logo from '../assets/logo.svg';
+
+// Redirect to dashboard if already logged in
+const user = getUserFromCookies(Astro.cookies);
+if (user) {
+  return Astro.redirect('/dashboard');
+}
+---
+
+<Layout title="Sign Up — Paper Mind">
+  <div class="flex-grow flex items-center justify-center py-16 px-4">
+    <div class="w-full max-w-sm card-auth text-center">
+      <div class="mb-8 flex flex-col items-center">
+        <img src={logo.src} alt="Paper Mind Logo" class="h-16 w-auto mb-6" />
+        <h1 class="text-2xl font-display font-semibold text-ink tracking-tight-lg">Create your account</h1>
+        <p class="text-sm text-mute mt-2">Initialize your private enterprise tenant.</p>
+      </div>
+
+      <form id="registerForm" class="space-y-4 text-left">
+        <div>
+          <label for="email" class="block text-sm font-medium text-ink mb-1.5">Email Address</label>
+          <input
+            type="email"
+            id="email"
+            name="email"
+            required
+            autocomplete="email"
+            placeholder="name@company.com"
+            class="input-field"
+          />
+        </div>
+
+        <div>
+          <label for="password" class="block text-sm font-medium text-ink mb-1.5">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            required
+            autocomplete="new-password"
+            placeholder="••••••••"
+            class="input-field"
+          />
+        </div>
+
+        <div>
+          <label for="confirmPassword" class="block text-sm font-medium text-ink mb-1.5">Confirm Password</label>
+          <input
+            type="password"
+            id="confirmPassword"
+            name="confirmPassword"
+            required
+            autocomplete="new-password"
+            placeholder="••••••••"
+            class="input-field"
+          />
+        </div>
+
+        <div class="pt-2">
+          <button
+            type="submit"
+            class="btn-primary w-full"
+          >
+            Sign Up
+          </button>
+        </div>
+      </form>
+
+      <div class="mt-6 text-sm text-body">
+        <span>Already have an account? </span>
+        <a href="/login" class="text-link hover:text-link-deep transition-colors font-medium">Log In</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const registerForm = document.getElementById('registerForm') as HTMLFormElement | null;
+
+    if (registerForm) {
+      registerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const email = (document.getElementById('email') as HTMLInputElement).value;
+        const password = (document.getElementById('password') as HTMLInputElement).value;
+        const confirmPassword = (document.getElementById('confirmPassword') as HTMLInputElement).value;
+
+        if (password !== confirmPassword) {
+          (window as any).showToast('Passwords do not match.', 'error');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email, password }),
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            (window as any).showToast('Registration successful! Redirecting...', 'success');
+            setTimeout(() => {
+              window.location.href = '/login';
+            }, 1500);
+          } else {
+            (window as any).showToast(data.message || 'Registration failed. Try a different email.', 'error');
+          }
+        } catch (error) {
+          console.error('Registration error:', error);
+          (window as any).showToast('An unexpected network error occurred. Please try again.', 'error');
+        }
+      });
+    }
+  </script>
+</Layout>

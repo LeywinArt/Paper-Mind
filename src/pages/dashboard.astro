@@ -1,0 +1,881 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { initDb, sql } from '../lib/db';
+import { getUserFromCookies } from '../lib/auth';
+
+// 1. Authenticate user
+const user = getUserFromCookies(Astro.cookies);
+if (!user) {
+  return Astro.redirect('/login');
+}
+
+// 2. Initialize Database & load data
+let dbError = null;
+let foldersList: any[] = [];
+let documentsList: any[] = [];
+let folderTree: any[] = [];
+
+try {
+  await initDb();
+
+  // Fetch folders and documents
+  foldersList = await sql`
+    SELECT id, name, parent_id 
+    FROM folders 
+    WHERE user_id = ${user.userId} 
+    ORDER BY name ASC
+  `;
+
+  documentsList = await sql`
+    SELECT d.id, d.name, d.file_size, d.page_count, d.status, d.created_at, d.folder_id, f.name as folder_name
+    FROM documents d
+    LEFT JOIN folders f ON d.folder_id = f.id
+    WHERE d.user_id = ${user.userId}
+    ORDER BY d.created_at DESC
+  `;
+
+  // Build folder tree helper
+  interface FolderNode {
+    id: string;
+    name: string;
+    parent_id: string | null;
+    children: FolderNode[];
+  }
+
+  function buildFolderTree(folders: any[], parentId: string | null = null): FolderNode[] {
+    return folders
+      .filter(f => f.parent_id === parentId)
+      .map(f => ({
+        id: f.id,
+        name: f.name,
+        parent_id: f.parent_id,
+        children: buildFolderTree(folders, f.id)
+      }));
+  }
+
+  folderTree = buildFolderTree(foldersList, null);
+} catch (error: any) {
+  console.error('Database connection error in dashboard:', error);
+  dbError = error.message || 'Could not connect to the database.';
+}
+
+const currentFolderId = Astro.url.searchParams.get('folder') || null;
+
+const breadcrumbs = [];
+if (currentFolderId) {
+  let curr = foldersList.find(f => f.id === currentFolderId);
+  while (curr) {
+    breadcrumbs.unshift(curr);
+    curr = foldersList.find(f => f.id === curr.parent_id);
+  }
+}
+const currentFolderNode = breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1] : null;
+const currentFolderName = currentFolderNode ? currentFolderNode.name : 'Document Library';
+const parentUrl = currentFolderId 
+  ? (breadcrumbs.length > 1 ? `/dashboard?folder=${breadcrumbs[breadcrumbs.length - 2].id}` : '/dashboard')
+  : null;
+
+const sortParam = Astro.url.searchParams.get('sort') || 'date_desc';
+
+const visibleFolders = foldersList.filter(f => f.parent_id === currentFolderId);
+const visibleDocuments = documentsList.filter(d => d.folder_id === currentFolderId);
+
+if (sortParam === 'name_asc') {
+  visibleFolders.sort((a, b) => a.name.localeCompare(b.name));
+  visibleDocuments.sort((a, b) => a.name.localeCompare(b.name));
+} else if (sortParam === 'name_desc') {
+  visibleFolders.sort((a, b) => b.name.localeCompare(a.name));
+  visibleDocuments.sort((a, b) => b.name.localeCompare(a.name));
+} else if (sortParam === 'date_asc') {
+  visibleDocuments.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+} else if (sortParam === 'date_desc') {
+  visibleDocuments.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+} else if (sortParam === 'size_asc') {
+  visibleDocuments.sort((a, b) => a.file_size - b.file_size);
+} else if (sortParam === 'size_desc') {
+  visibleDocuments.sort((a, b) => b.file_size - a.file_size);
+}
+
+const hasProcessingDocs = documentsList.some(doc => doc.status === 'processing');
+
+// Format bytes helper
+function formatBytes(bytes: number) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Format date helper
+function formatDate(dateStr: string) {
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+// Recursive function to generate folder tree HTML options (for dropdown)
+function renderFolderOptions(nodes: any[], depth = 0): string {
+  return nodes.map(node => `
+    <option value="${node.id}">${'&nbsp;&nbsp;'.repeat(depth)}└─ ${node.name}</option>
+    ${renderFolderOptions(node.children, depth + 1)}
+  `).join('');
+}
+
+function renderFolderTreeList(nodes: any[], depth = 0, parentId = 'root'): string {
+  if (nodes.length === 0) return '';
+  return `
+    <ul class="sidebar-folder-list space-y-1.5 ${depth > 0 ? 'ml-3 border-l border-hairline pl-3.5 mt-1' : ''}" data-parent-id="${parentId}">
+      ${nodes.map(node => `
+        <li class="group" data-node-id="${node.id}">
+          <div class="folder-row flex items-center justify-between py-1.5 px-2 rounded-sm hover:bg-soft-stone transition-colors cursor-pointer text-xs group/row" data-folder-id="${node.id}" data-folder-name="${node.name}">
+            <span class="flex items-center gap-1.5 truncate flex-1">
+              ${node.children && node.children.length > 0 ? `
+                <button class="folder-toggle-btn text-slate hover:text-ink transition-transform duration-200 focus:outline-none" aria-expanded="true" onclick="event.stopPropagation(); const ul = this.closest('li').querySelector('.folder-children'); ul.classList.toggle('hidden'); this.classList.toggle('-rotate-90');">
+                  <svg class="w-3.5 h-3.5 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                </button>
+              ` : `
+                <svg class="w-3.5 h-3.5 text-slate flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                </svg>
+              `}
+              <span class="font-medium text-ink truncate">${node.name}</span>
+            </span>
+            <button class="delete-folder-btn text-[10px] uppercase font-mono text-muted hover:text-error opacity-0 group-hover/row:opacity-100 transition-opacity ml-2" data-id="${node.id}">
+              Delete
+            </button>
+          </div>
+          <div class="folder-children transition-all duration-300">
+            ${renderFolderTreeList(node.children, depth + 1, node.id)}
+          </div>
+        </li>
+      `).join('')}
+    </ul>
+  `;
+}
+---
+
+<Layout title="Dashboard — Paper Mind">
+  <div class="max-w-[1400px] mx-auto w-full px-6 sm:px-12 py-12 flex-grow flex flex-col">
+    <!-- Top Header -->
+    <div class="mb-10 flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-hairline pb-6">
+      <div>
+        <div class="flex items-center gap-2 text-sm mb-2 font-medium">
+          <a href="/dashboard" class="text-mute hover:text-ink transition-colors">Workspace</a>
+          {breadcrumbs.map(bc => (
+            <>
+              <span class="text-hairline">/</span>
+              <a href={`/dashboard?folder=${bc.id}`} class="text-mute hover:text-ink transition-colors">{bc.name}</a>
+            </>
+          ))}
+        </div>
+        <h1 class="text-4xl font-display font-semibold text-ink mt-2 tracking-tight-lg">{currentFolderName}</h1>
+      </div>
+      
+      <!-- Quick Chat Launch Selector -->
+      <div class="bg-canvas p-4 rounded-md shadow-[var(--shadow-level-2)] border border-hairline flex flex-col sm:flex-row items-start sm:items-center gap-4 max-w-lg">
+        <div class="text-xs">
+          <span class="block font-mono text-mute uppercase tracking-wider text-[10px]">SELECTED CHAT CONTEXT</span>
+          <span id="selectedContextText" class="font-semibold text-ink">{currentFolderName === 'Document Library' ? 'Entire Library (All Documents)' : currentFolderName}</span>
+        </div>
+        <a 
+          id="launchChatBtn"
+          href={`/chat${currentFolderId ? `?context_type=folder&context_id=${currentFolderId}` : ''}`}
+          class="btn-primary-sm border border-transparent"
+        >
+          Open Chat Console
+        </a>
+      </div>
+    </div>
+
+    {dbError ? (
+      <div class="bg-error-soft border border-error-soft p-6 text-sm text-error-deep rounded-md my-12 shadow-[var(--shadow-level-2)]">
+        <h3 class="font-semibold text-base mb-2">Database Connection Error</h3>
+        <p>{dbError}</p>
+        <p class="mt-4 text-xs">Please make sure the PostgreSQL service is running and configured correctly in your environment variables.</p>
+      </div>
+    ) : (
+      <div class="grid grid-cols-1 lg:grid-cols-4 gap-12 items-start flex-grow">
+        <!-- Folders Panel (Sidebar) -->
+        <div class="lg:col-span-1 bg-canvas border border-hairline p-6 rounded-md shadow-[var(--shadow-level-2)]">
+          <div class="flex items-center justify-between border-b border-hairline pb-3 mb-4">
+            <span class="text-xs font-mono uppercase tracking-wider text-mute font-medium">Folders</span>
+            <button 
+              id="showFolderFormBtn"
+              class="flex items-center gap-1.5 py-1 px-3 rounded-full text-xs font-medium text-[#12b8a6] bg-[#12b8a6]/10 border border-[#12b8a6] hover:bg-[#12b8a6] hover:text-white transition-all duration-300 active:scale-95"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+              Create
+            </button>
+          </div>
+
+          <!-- Create Folder Inline Form -->
+          <form id="createFolderForm" class="hidden mb-6 p-4 bg-canvas-soft border border-hairline rounded-md shadow-[var(--shadow-level-1)] space-y-3">
+            <div>
+              <label for="folderName" class="block text-[10px] font-mono uppercase tracking-wider text-ink mb-1">Folder Name</label>
+              <input 
+                type="text" 
+                id="folderName" 
+                name="name" 
+                required 
+                placeholder="e.g. Finance" 
+                class="input-field py-1.5 px-2.5 text-xs"
+              />
+            </div>
+            <div>
+              <label for="folderParent" class="block text-[10px] font-mono uppercase tracking-wider text-ink mb-1">Parent (Optional)</label>
+              <select 
+                id="folderParent" 
+                name="parent_id" 
+                class="input-field py-1.5 px-2 text-xs bg-canvas"
+              >
+                <option value="">-- No Parent (Root) --</option>
+                Fragment HTML will be injected here
+                <Fragment set:html={renderFolderOptions(folderTree)} />
+              </select>
+            </div>
+            <div class="flex justify-end gap-2 text-xs mt-2">
+              <button type="button" id="cancelFolderBtn" class="py-1 px-2.5 font-mono text-slate hover:bg-hairline rounded uppercase text-[10px] transition-colors active:scale-95">Cancel</button>
+              <button type="submit" id="sidebarSaveFolderBtn" class="bg-ink text-canvas hover:bg-slate active:scale-95 py-1 px-3 rounded text-[10px] uppercase font-mono tracking-wider font-semibold transition-all">Save</button>
+            </div>
+          </form>
+
+          <!-- Folders Tree List -->
+          <div class="space-y-2">
+            <div 
+              class="folder-row flex items-center justify-between py-1.5 px-2 rounded-sm bg-soft-stone cursor-pointer text-xs border border-transparent font-semibold text-ink" 
+              data-folder-id="all" 
+              data-folder-name="Entire Library"
+              id="folderRowAll"
+            >
+              <span class="flex items-center gap-2">
+                <svg class="w-3.5 h-3.5 text-ink flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                </svg>
+                <span>Entire Library</span>
+              </span>
+            </div>
+            
+            {foldersList.length === 0 ? (
+              <p class="text-xs text-muted italic mt-4 px-2">No folders created yet.</p>
+            ) : (
+              <Fragment set:html={renderFolderTreeList(folderTree)} />
+            )}
+          </div>
+        </div>
+
+          <!-- Main Panel: Upload & Document List -->
+        <div class="lg:col-span-3 space-y-8">
+          <!-- Document Upload Box -->
+          <div class="border-2 border-dashed border-hairline-strong bg-canvas p-8 rounded-xl text-center relative group hover:border-cyan hover:bg-cyan/5 transition-all shadow-[var(--shadow-level-1)]">
+            <form id="uploadForm" class="space-y-4">
+              <div class="flex flex-col items-center justify-center">
+                <div class="w-16 h-16 rounded-full bg-gradient-to-tr from-blue-500/10 to-cyan/10 border border-cyan/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-300">
+                  <svg class="w-8 h-8 text-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                  </svg>
+                </div>
+                <h3 class="text-base font-semibold text-ink">Upload Documents</h3>
+                <p class="text-xs text-mute mt-1 mb-4">Click to select files or drag and drop documents here (Max size 10MB)</p>
+                
+                <!-- Target upload folder selector -->
+                <input type="hidden" id="uploadFolderSelect" value={currentFolderId || ''} />
+
+                <input 
+                  type="file" 
+                  id="pdfFileInput" 
+                  accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.md" 
+                  class="hidden" 
+                  multiple
+                  required
+                />
+                <button 
+                  type="button" 
+                  id="browseBtn"
+                  class="btn-secondary-sm"
+                >
+                  Browse Files
+                </button>
+              </div>
+            </form>
+
+            <!-- Upload Progress Overlay -->
+            <div id="uploadProgressOverlay" class="hidden absolute inset-0 bg-canvas/95 flex flex-col items-center justify-center p-6 rounded-sm">
+              <div class="w-16 h-16 rounded-full border-4 border-hairline border-t-primary animate-spin mb-4"></div>
+              <h4 id="progressTitle" class="text-sm font-semibold text-cohere-black">Uploading and indexing document...</h4>
+              <p id="progressSub" class="text-xs text-muted mt-1">This involves parsing pages, chunking, and generating Gemini vector embeddings.</p>
+            </div>
+            
+            <!-- Direct Folder Modal -->
+            <div id="directFolderModal" class="hidden fixed inset-0 w-full h-full bg-ink/30 backdrop-blur-sm z-[100] flex items-center justify-center transition-all duration-200">
+              <div class="bg-canvas border border-hairline shadow-2xl rounded-xl p-6 w-full max-w-sm m-4 transform transition-all" onclick="event.stopPropagation();">
+                <h3 class="text-base font-semibold mb-4 text-ink">Create New Folder</h3>
+                <input type="text" id="directFolderName" class="input-field bg-canvas py-2 px-3 text-sm w-full mb-6 focus:ring-2 focus:ring-ink/10" placeholder="e.g. Finance Reports" />
+                <div class="flex justify-end gap-3">
+                  <button onclick="document.getElementById('directFolderModal').classList.add('hidden');" class="btn-secondary-sm py-2 px-4 bg-canvas border border-hairline hover:bg-hairline text-slate">Cancel</button>
+                  <button id="directFolderSaveBtn" class="bg-ink text-canvas rounded-md text-sm px-4 py-2 font-medium hover:bg-slate transition-colors active:scale-95 shadow-md">Create Folder</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Documents List Table -->
+          <div class="bg-canvas border border-hairline rounded-md shadow-[var(--shadow-level-3)] overflow-hidden">
+            <div class="p-4 border-b border-hairline flex items-center justify-between bg-canvas-soft">
+              <div class="flex items-center gap-3">
+                {parentUrl && (
+                  <a href={parentUrl} class="btn-secondary-sm py-1 px-2 flex items-center gap-1" title="Go back to parent folder">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                    Back
+                  </a>
+                )}
+                <div class="flex items-center gap-2 text-sm font-medium">
+                  <a href="/dashboard" class="text-mute hover:text-ink transition-colors">
+                    <svg class="w-4 h-4 inline mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                  </a>
+                  {breadcrumbs.length === 0 && (
+                    <>
+                      <span class="text-hairline">/</span>
+                      <span class="text-ink">Documents</span>
+                    </>
+                  )}
+                  {breadcrumbs.map(bc => (
+                    <>
+                      <span class="text-hairline">/</span>
+                      <a href={`/dashboard?folder=${bc.id}`} class="text-ink hover:text-action-blue transition-colors">{bc.name}</a>
+                    </>
+                  ))}
+                </div>
+              </div>
+              <div class="flex items-center gap-4">
+                <!-- Sorting Dropdown -->
+                <div class="relative">
+                  <button id="sortBtn" class="py-1 px-3 flex items-center gap-1.5 bg-transparent hover:bg-soft-stone hover:text-ink text-xs font-medium text-slate rounded transition-colors active:scale-95">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"></path></svg>
+                    Sort
+                  </button>
+                  <div id="sortMenu" class="absolute right-0 mt-1 w-40 bg-canvas border border-hairline shadow-[var(--shadow-level-2)] rounded-md py-1 hidden z-20">
+                    <a href={`/dashboard?${currentFolderId ? `folder=${currentFolderId}&` : ''}sort=date_desc`} class={`block px-3 py-1.5 text-xs hover:bg-soft-stone ${sortParam === 'date_desc' ? 'font-semibold text-ink' : 'text-slate'}`}>Date (Newest)</a>
+                    <a href={`/dashboard?${currentFolderId ? `folder=${currentFolderId}&` : ''}sort=date_asc`} class={`block px-3 py-1.5 text-xs hover:bg-soft-stone ${sortParam === 'date_asc' ? 'font-semibold text-ink' : 'text-slate'}`}>Date (Oldest)</a>
+                    <a href={`/dashboard?${currentFolderId ? `folder=${currentFolderId}&` : ''}sort=name_asc`} class={`block px-3 py-1.5 text-xs hover:bg-soft-stone ${sortParam === 'name_asc' ? 'font-semibold text-ink' : 'text-slate'}`}>Name (A-Z)</a>
+                    <a href={`/dashboard?${currentFolderId ? `folder=${currentFolderId}&` : ''}sort=name_desc`} class={`block px-3 py-1.5 text-xs hover:bg-soft-stone ${sortParam === 'name_desc' ? 'font-semibold text-ink' : 'text-slate'}`}>Name (Z-A)</a>
+                    <a href={`/dashboard?${currentFolderId ? `folder=${currentFolderId}&` : ''}sort=size_desc`} class={`block px-3 py-1.5 text-xs hover:bg-soft-stone ${sortParam === 'size_desc' ? 'font-semibold text-ink' : 'text-slate'}`}>Size (Largest)</a>
+                    <a href={`/dashboard?${currentFolderId ? `folder=${currentFolderId}&` : ''}sort=size_asc`} class={`block px-3 py-1.5 text-xs hover:bg-soft-stone ${sortParam === 'size_asc' ? 'font-semibold text-ink' : 'text-slate'}`}>Size (Smallest)</a>
+                  </div>
+                </div>
+
+                <span class="text-xs font-mono text-mute">{visibleFolders.length} folders, {visibleDocuments.length} files</span>
+                <button 
+                  onclick="document.getElementById('directFolderModal').classList.remove('hidden'); document.getElementById('directFolderName').focus();"
+                  class="btn-secondary-sm py-1 px-2.5 flex items-center gap-1.5 border-transparent bg-soft-stone hover:bg-hairline"
+                  title="Create Folder Here"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                  New Folder
+                </button>
+              </div>
+            </div>
+
+            {visibleDocuments.length === 0 && visibleFolders.length === 0 ? (
+              <div class="p-12 text-center text-sm text-muted italic">
+                This folder is empty. Upload your first document above to start Q&A pipeline.
+              </div>
+            ) : (
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-soft-stone text-slate font-mono uppercase tracking-wider border-b border-hairline">
+                      <th class="py-3 px-6 font-medium">Name</th>
+                      <th class="py-3 px-6 font-medium">Size</th>
+                      <th class="py-3 px-6 font-medium">Pages</th>
+                      <th class="py-3 px-6 font-medium">Upload Date</th>
+                      <th class="py-3 px-6 font-medium">Status</th>
+                      <th class="py-3 px-6 font-medium text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-hairline">
+                    {visibleFolders.map(folder => (
+                      <tr class="hover:bg-soft-stone/50 transition-colors cursor-pointer group" onclick={`window.location.href='/dashboard?folder=${folder.id}'`}>
+                        <td class="py-3.5 px-6 font-medium text-ink flex items-center gap-2 truncate max-w-xs">
+                          <svg class="w-4 h-4 text-slate flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                          </svg>
+                          <span class="truncate font-semibold">{folder.name}</span>
+                        </td>
+                        <td class="py-3.5 px-6 text-slate">—</td>
+                        <td class="py-3.5 px-6 text-slate">—</td>
+                        <td class="py-3.5 px-6 text-slate">—</td>
+                        <td class="py-3.5 px-6"><span class="text-[10px] text-mute uppercase font-mono tracking-wider font-semibold">Folder</span></td>
+                        <td class="py-3.5 px-6 text-right">
+                          <button class="delete-folder-btn opacity-0 group-hover:opacity-100 text-error hover:text-error-deep transition-colors" data-id={folder.id} title="Delete Folder" onclick="event.stopPropagation();">
+                            <svg class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {visibleDocuments.map(doc => (
+                      <tr class="hover:bg-soft-stone/50 transition-colors document-row cursor-pointer" data-doc-id={doc.id} data-doc-name={doc.name}>
+                        <td class="py-3.5 px-6 font-medium text-ink flex items-center gap-2 truncate max-w-xs">
+                          <svg class="w-4 h-4 text-coral flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                          </svg>
+                          <a href={`/api/documents/download?id=${doc.id}`} target="_blank" class="truncate hover:text-action-blue hover:underline" onClick={(e) => e.stopPropagation()}>{doc.name}</a>
+                        </td>
+                        <td class="py-3.5 px-6 text-slate">{formatBytes(doc.file_size)}</td>
+                        <td class="py-3.5 px-6 text-slate">{doc.page_count}</td>
+                        <td class="py-3.5 px-6 text-slate">{formatDate(doc.created_at)}</td>
+                        <td class="py-3.5 px-6">
+                          <span class={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                            doc.status === 'processed' 
+                              ? 'bg-emerald-50 text-emerald-700' 
+                              : doc.status === 'processing' 
+                                ? 'bg-amber-50 text-amber-700 animate-pulse' 
+                                : 'bg-red-50 text-error'
+                          }`}>
+                            <span class={`w-1 h-1 rounded-full ${
+                              doc.status === 'processed' 
+                                ? 'bg-emerald-500' 
+                                : doc.status === 'processing' 
+                                  ? 'bg-amber-500' 
+                                  : 'bg-error'
+                            }`}></span>
+                            {doc.status}
+                          </span>
+                        </td>
+                        <td class="py-3.5 px-6 text-right" onClick={(e) => e.stopPropagation()}>
+                          <button 
+                            class="delete-doc-btn text-[10px] font-mono uppercase text-muted hover:text-error transition-colors"
+                            data-id={doc.id}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
+
+  <script>
+    document.addEventListener('astro:page-load', () => {
+      // Ensure we only run on dashboard
+      const isDashboard = document.getElementById('selectedContextText');
+      if (!isDashboard) return;
+
+      // State representation
+    let selectedContextType = 'all'; // 'all', 'folder', 'document'
+    let selectedContextId = '';
+    let selectedContextName = 'Entire Library';
+
+    // UI Nodes
+    const selectedContextText = document.getElementById('selectedContextText');
+    const launchChatBtn = document.getElementById('launchChatBtn');
+    const showFolderFormBtn = document.getElementById('showFolderFormBtn');
+    const createFolderForm = document.getElementById('createFolderForm');
+    const cancelFolderBtn = document.getElementById('cancelFolderBtn');
+    const pdfFileInput = document.getElementById('pdfFileInput');
+    const browseBtn = document.getElementById('browseBtn');
+    const uploadFolderSelect = document.getElementById('uploadFolderSelect');
+    const uploadProgressOverlay = document.getElementById('uploadProgressOverlay');
+
+    // Sort Dropdown Logic
+    const sortBtn = document.getElementById('sortBtn');
+    const sortMenu = document.getElementById('sortMenu');
+    if (sortBtn && sortMenu) {
+      sortBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sortMenu.classList.toggle('hidden');
+        sortBtn.classList.toggle('text-ink');
+        sortBtn.classList.toggle('bg-soft-stone');
+      });
+      document.addEventListener('click', () => {
+        if (!sortMenu.classList.contains('hidden')) {
+          sortMenu.classList.add('hidden');
+          sortBtn.classList.remove('text-ink');
+          sortBtn.classList.remove('bg-soft-stone');
+        }
+      });
+      sortMenu.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    // Update Chat Button Target Link
+    function updateChatButton() {
+      if (launchChatBtn) {
+        let url = '/chat';
+        if (selectedContextType !== 'all') {
+          url += `?type=${selectedContextType}&id=${selectedContextId}`;
+        }
+        launchChatBtn.href = url;
+      }
+      if (selectedContextText) {
+        selectedContextText.textContent = `${selectedContextName} (${
+          selectedContextType === 'all' 
+            ? 'All Documents' 
+            : selectedContextType === 'folder' 
+              ? 'Folder-Level' 
+              : 'Single Document'
+        })`;
+      }
+    }
+
+    // 1. Folders: Toggle Form
+    if (showFolderFormBtn && createFolderForm) {
+      showFolderFormBtn.addEventListener('click', () => {
+        createFolderForm.classList.toggle('hidden');
+        document.getElementById('folderName')?.focus();
+      });
+    }
+
+    if (cancelFolderBtn && createFolderForm) {
+      cancelFolderBtn.addEventListener('click', () => {
+        createFolderForm.classList.add('hidden');
+      });
+    }
+
+    // Create Folder Submit
+    if (createFolderForm) {
+      createFolderForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('folderName').value;
+        const parent_id = document.getElementById('folderParent').value || null;
+        
+        const saveBtn = document.getElementById('sidebarSaveFolderBtn');
+        if (saveBtn) {
+          saveBtn.textContent = 'SAVING...';
+          saveBtn.classList.add('opacity-50', 'pointer-events-none');
+        }
+
+        try {
+          const response = await fetch('/api/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, parent_id }),
+          });
+
+          if (response.ok) {
+            window.showToast('Folder created successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+          } else {
+            const err = await response.json();
+            window.showToast('Failed to create folder: ' + err.message, 'error');
+            if (saveBtn) {
+              saveBtn.textContent = 'SAVE';
+              saveBtn.classList.remove('opacity-50', 'pointer-events-none');
+            }
+          }
+        } catch (error) {
+          console.error(error);
+          window.showToast('Network error while creating folder.', 'error');
+          if (saveBtn) {
+            saveBtn.textContent = 'SAVE';
+            saveBtn.classList.remove('opacity-50', 'pointer-events-none');
+          }
+        }
+      });
+    }
+
+    // Delete Folder Click
+    document.querySelectorAll('.delete-folder-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = e.currentTarget.dataset.id;
+        if (!confirm('Are you sure you want to delete this folder and all its nested subfolders? Documents inside will remain, but their folder links will be removed.')) {
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/folders?id=${id}`, {
+            method: 'DELETE',
+          });
+
+          if (response.ok) {
+            window.showToast('Folder deleted successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+          } else {
+            window.showToast('Failed to delete folder.', 'error');
+          }
+        } catch (error) {
+          console.error(error);
+          window.showToast('Network error.', 'error');
+        }
+      });
+    });
+
+    // Folder Row Click Selection (Sync with Document Panel)
+    document.querySelectorAll('.folder-row').forEach(row => {
+      row.addEventListener('click', (e) => {
+        const el = e.currentTarget;
+        const folderId = el.dataset.folderId;
+        window.location.href = folderId === 'all' ? '/dashboard' : `/dashboard?folder=${folderId}`;
+      });
+    });
+
+    // 2. Upload Handler
+    if (browseBtn && pdfFileInput) {
+      browseBtn.addEventListener('click', () => {
+        pdfFileInput.click();
+      });
+
+      pdfFileInput.addEventListener('change', async () => {
+        if (!pdfFileInput.files || pdfFileInput.files.length === 0) return;
+        
+        const files = Array.from(pdfFileInput.files);
+        const validFiles = [];
+
+        // Validate sizes
+        for (const file of files) {
+          if (file.size > 10 * 1024 * 1024) {
+            window.showToast(`File ${file.name} exceeds 10MB limit. Skipping.`, 'error');
+          } else {
+            validFiles.push(file);
+          }
+        }
+
+        if (validFiles.length === 0) return;
+
+        if (uploadProgressOverlay) {
+          uploadProgressOverlay.classList.remove('hidden');
+        }
+
+        try {
+          const uploadPromises = validFiles.map(file => {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (uploadFolderSelect) {
+              formData.append('folder_id', uploadFolderSelect.value);
+            }
+
+            return fetch('/api/documents/upload', {
+              method: 'POST',
+              body: formData,
+            });
+          });
+
+          const responses = await Promise.all(uploadPromises);
+          
+          let allOk = true;
+          for (const res of responses) {
+            if (!res.ok) allOk = false;
+          }
+
+          if (allOk) {
+            window.showToast(`${validFiles.length} file(s) uploaded successfully.`, 'success');
+            setTimeout(() => window.location.reload(), 1000);
+          } else {
+            window.showToast('Some files failed to upload.', 'error');
+            if (uploadProgressOverlay) uploadProgressOverlay.classList.add('hidden');
+          }
+        } catch (error) {
+          console.error(error);
+          window.showToast('Network error during upload.', 'error');
+          if (uploadProgressOverlay) uploadProgressOverlay.classList.add('hidden');
+        } finally {
+          // Reset file input so same files can be selected again
+          pdfFileInput.value = '';
+        }
+      });
+    }
+
+    // 3. Document Selection & Delete
+    document.querySelectorAll('.document-row').forEach(row => {
+      row.addEventListener('click', (e) => {
+        // Deselect folders
+        document.querySelectorAll('.folder-row').forEach(r => r.classList.remove('bg-soft-stone', 'font-semibold'));
+        
+        const el = e.currentTarget;
+        const id = el.dataset.docId;
+        const name = el.dataset.docName;
+
+        selectedContextType = 'document';
+        selectedContextId = id || '';
+        selectedContextName = `Doc: ${name}`;
+        updateChatButton();
+      });
+    });
+
+    // Delete Document
+    document.querySelectorAll('.delete-doc-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = e.currentTarget.dataset.id;
+        if (!confirm('Are you sure you want to delete this document and all its indexed vector chunks? This cannot be undone.')) {
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/documents/${id}`, {
+            method: 'DELETE',
+          });
+
+          if (response.ok) {
+            window.showToast('Document deleted successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+          } else {
+            window.showToast('Failed to delete document.', 'error');
+          }
+        } catch (error) {
+          console.error(error);
+          window.showToast('Network error.', 'error');
+        }
+      });
+    });
+
+    // Drag and drop upload effects
+    const uploadArea = pdfFileInput?.closest('div');
+    if (uploadArea) {
+      ['dragenter', 'dragover'].forEach(eventName => {
+        uploadArea.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          uploadArea.classList.add('border-primary');
+        }, false);
+      });
+
+      ['dragleave', 'drop'].forEach(eventName => {
+        uploadArea.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          uploadArea.classList.remove('border-primary');
+        }, false);
+      });
+
+      uploadArea.addEventListener('drop', async (e) => {
+        const dt = e.dataTransfer;
+        const files = dt?.files;
+        if (files && files.length > 0 && pdfFileInput) {
+          pdfFileInput.files = files;
+          // Trigger the change handler
+          pdfFileInput.dispatchEvent(new Event('change'));
+        }
+      });
+    }
+
+    // Folder Drag-and-Drop LocalStorage Reordering
+    const folderLists = document.querySelectorAll('.sidebar-folder-list');
+    folderLists.forEach(ul => {
+      // Reorder based on localStorage
+      const parentId = ul.dataset.parentId || 'root';
+      const savedOrder = JSON.parse(localStorage.getItem('folderOrder') || '{}');
+      const order = savedOrder[parentId];
+      
+      if (order && order.length > 0) {
+        const items = Array.from(ul.children);
+        items.sort((a, b) => {
+          const idA = a.dataset.nodeId || '';
+          const idB = b.dataset.nodeId || '';
+          const idxA = order.indexOf(idA);
+          const idxB = order.indexOf(idB);
+          if (idxA === -1 && idxB === -1) return 0;
+          if (idxA === -1) return 1;
+          if (idxB === -1) return -1;
+          return idxA - idxB;
+        });
+        items.forEach(item => ul.appendChild(item));
+      }
+
+      ul.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const dragging = document.querySelector('.dragging');
+        if (!dragging || dragging.parentElement !== ul) return; // Only allow reordering within same level
+        
+        const afterElement = getDragAfterElement(ul, e.clientY);
+        if (afterElement == null) {
+          ul.appendChild(dragging);
+        } else {
+          ul.insertBefore(dragging, afterElement);
+        }
+      });
+
+      ul.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const dragging = document.querySelector('.dragging');
+        if (!dragging) return;
+        dragging.classList.remove('dragging', 'opacity-50');
+
+        // Save new order to localStorage
+        const newOrder = Array.from(ul.children).map(li => li.dataset.nodeId);
+        const allOrders = JSON.parse(localStorage.getItem('folderOrder') || '{}');
+        allOrders[parentId] = newOrder;
+        localStorage.setItem('folderOrder', JSON.stringify(allOrders));
+      });
+    });
+
+    function getDragAfterElement(container, y) {
+      const draggableElements = [...container.querySelectorAll('li:not(.dragging)')];
+      return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+          return { offset: offset, element: child };
+        } else {
+          return closest;
+        }
+      }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+    }
+
+    document.querySelectorAll('li[data-node-id]').forEach(li => {
+      li.setAttribute('draggable', 'true');
+      li.addEventListener('dragstart', () => {
+        li.classList.add('dragging', 'opacity-50');
+      });
+      li.addEventListener('dragend', () => {
+        li.classList.remove('dragging', 'opacity-50');
+      });
+    });
+
+    // Direct Folder Modal Logic
+    const directFolderModal = document.getElementById('directFolderModal');
+    const directFolderSaveBtn = document.getElementById('directFolderSaveBtn');
+    
+    if (directFolderSaveBtn) {
+      directFolderSaveBtn.addEventListener('click', async () => {
+        const input = document.getElementById('directFolderName');
+        const name = input.value.trim();
+        if (!name) return;
+        
+        directFolderSaveBtn.textContent = 'Creating...';
+        directFolderSaveBtn.classList.add('opacity-50', 'pointer-events-none');
+
+        const uploadFolderSelect = document.getElementById('uploadFolderSelect');
+        try {
+          const response = await fetch('/api/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, parent_id: uploadFolderSelect ? uploadFolderSelect.value : null })
+          });
+          if (response.ok) {
+            window.showToast('Folder created successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+          } else {
+            const data = await response.json();
+            window.showToast('Error: ' + data.message, 'error');
+            directFolderSaveBtn.textContent = 'Create Folder';
+            directFolderSaveBtn.classList.remove('opacity-50', 'pointer-events-none');
+          }
+        } catch (e) {
+          window.showToast('Network error', 'error');
+          directFolderSaveBtn.textContent = 'Create Folder';
+          directFolderSaveBtn.classList.remove('opacity-50', 'pointer-events-none');
+        }
+      });
+    }
+  });
+</script>
+
+  {hasProcessingDocs && (
+    <script>
+      document.addEventListener('astro:page-load', () => {
+        setTimeout(() => {
+          window.location.reload();
+        }, 5000);
+      });
+    </script>
+  )}
+</Layout>

@@ -1,0 +1,101 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { getUserFromCookies } from '../lib/auth';
+import logo from '../assets/logo.svg';
+
+// Redirect to dashboard if already logged in
+const user = getUserFromCookies(Astro.cookies);
+if (user) {
+  return Astro.redirect('/dashboard');
+}
+---
+
+<Layout title="Log In — Paper Mind">
+  <div class="flex-grow flex items-center justify-center py-16 px-4">
+    <div class="w-full max-w-sm card-auth text-center">
+      <div class="mb-8 flex flex-col items-center">
+        <img src={logo.src} alt="Paper Mind Logo" class="h-16 w-auto mb-6" />
+        <h1 class="text-2xl font-display font-semibold text-ink tracking-tight-lg">Log in to Paper Mind</h1>
+        <p class="text-sm text-mute mt-2">Enter your credentials to access your dashboard.</p>
+      </div>
+
+      <form id="loginForm" class="space-y-4 text-left">
+        <div>
+          <label for="email" class="block text-sm font-medium text-ink mb-1.5">Email Address</label>
+          <input
+            type="email"
+            id="email"
+            name="email"
+            required
+            autocomplete="email"
+            placeholder="name@company.com"
+            class="input-field"
+          />
+        </div>
+
+        <div>
+          <label for="password" class="block text-sm font-medium text-ink mb-1.5">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            required
+            autocomplete="current-password"
+            placeholder="••••••••"
+            class="input-field"
+          />
+        </div>
+
+        <div class="pt-2">
+          <button
+            type="submit"
+            class="btn-primary w-full"
+          >
+            Continue
+          </button>
+        </div>
+      </form>
+
+      <div class="mt-6 text-sm text-body">
+        <span>Don't have an account? </span>
+        <a href="/register" class="text-link hover:text-link-deep transition-colors font-medium">Sign Up</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm') as HTMLFormElement | null;
+
+    if (loginForm) {
+      loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const email = (document.getElementById('email') as HTMLInputElement).value;
+        const password = (document.getElementById('password') as HTMLInputElement).value;
+
+        try {
+          const response = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email, password }),
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            // Success: Redirect to dashboard
+            window.location.href = '/dashboard';
+          } else {
+            // Error
+            (window as any).showToast(data.message || 'Authentication failed. Please verify credentials.', 'error');
+          }
+        } catch (error) {
+          console.error('Authentication error:', error);
+          (window as any).showToast('An unexpected network error occurred. Please try again.', 'error');
+        }
+      });
+    }
+  </script>
+</Layout>
